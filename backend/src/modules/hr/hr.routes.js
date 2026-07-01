@@ -65,6 +65,47 @@ router.get(
   })
 );
 
+// Monthly attendance summary + day-by-day statuses for one employee
+router.get(
+  '/employees/:id/attendance/summary',
+  asyncHandler(async (req, res) => {
+    const month = req.query.month; // 'YYYY-MM'
+    if (!/^\d{4}-\d{2}$/.test(month || '')) {
+      throw ApiError.badRequest('month query param required as YYYY-MM');
+    }
+    const start = `${month}-01`;
+    const r = await query(
+      `SELECT work_date, status, remarks FROM attendance
+       WHERE employee_id = $1
+         AND work_date >= $2::date
+         AND work_date < ($2::date + INTERVAL '1 month')
+       ORDER BY work_date`,
+      [req.params.id, start]
+    );
+
+    // format each work_date to YYYY-MM-DD using local components (no UTC shift)
+    const ymd = (d) => {
+      const x = new Date(d);
+      return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    };
+    const counts = { present: 0, absent: 0, leave: 0, half_day: 0 };
+    const byDate = {};
+    for (const row of r.rows) {
+      counts[row.status] = (counts[row.status] || 0) + 1;
+      byDate[ymd(row.work_date)] = { status: row.status, remarks: row.remarks };
+    }
+    const recorded = r.rows.length;
+    const attendancePct = recorded
+      ? Math.round(((counts.present + counts.half_day * 0.5) / recorded) * 100)
+      : 0;
+
+    res.json({
+      success: true,
+      data: { month, counts, byDate, recorded, attendancePct },
+    });
+  })
+);
+
 // Mark / upsert attendance for a day
 router.post(
   '/employees/:id/attendance',
